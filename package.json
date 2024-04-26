@@ -1,0 +1,35 @@
+{
+    "name": "typescript-template",
+    "version": "1.0.0",
+    "main": "./dist/index.js",
+    "author": "zpalmtree <22151537+zpalmtree@users.noreply.github.com>",
+    "license": "AGPL-3.0",
+    "type": "module",
+    "scripts": {
+        "start": "node --enable-source-maps --experimental-specifier-resolution=node ./dist/index.js",
+        "build": "node ./node_modules/typescript/bin/tsc",
+        "lint": "node ./node_modules/.bin/eslint .",
+        "prepare": "husky install",
+        "test": "jest"
+    },
+    "files": [
+        "dist/*"
+    ],
+    "dependencies": {
+        "@types/node": "^20.12.7",
+        "fabric": "^6.0.0-rc1",
+        "node-canvas": "^2.9.0",
+        "tslog": "^4.4.4"
+    },
+    "devDependencies": {
+        "@types/jest": "^29.2.5",
+        "@typescript-eslint/eslint-plugin": "^5.46.0",
+        "@typescript-eslint/parser": "^5.46.0",
+        "eslint": "^8.29.0",
+        "husky": "^8.0.0",
+        "jest": "^29.3.1",
+        "lint-staged": "^13.1.0",
+        "ts-jest": "^29.0.4",
+        "typescript": "^4.9.4"
+    }
+}
