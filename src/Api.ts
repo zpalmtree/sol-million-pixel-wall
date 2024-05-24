@@ -1,7 +1,6 @@
 import express, { Request, Response } from 'express';
 import { Server } from 'http';
 import cors from 'cors';
-import { v4 as uuidv4 } from 'uuid';
 import { match } from 'path-to-regexp';
 import {
     Transaction,
@@ -25,7 +24,6 @@ import { PixelWall } from './PixelWall.js';
 import {
     DB,
     RouteData,
-    Endpoint,
     ApiMethod,
     ApiRoute,
     Coordinate,

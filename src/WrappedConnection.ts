@@ -1,4 +1,4 @@
-import { Connection, Keypair } from "@solana/web3.js";
+import { Connection } from "@solana/web3.js";
 import axios from "axios";
 
 export class WrappedConnection extends Connection {

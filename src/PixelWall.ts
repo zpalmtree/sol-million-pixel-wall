@@ -1,4 +1,4 @@
-import { Image, StaticCanvas } from 'fabric/node';
+import { StaticCanvas } from 'fabric/node';
 
 import { DB } from './Types.js';
 import { ImageManipulation } from './ImageManipulation.js';
@@ -13,7 +13,7 @@ export class PixelWall {
 
     private cachedCanvasImage: string | undefined = undefined;
 
-    constructor(db: DB) {
+    constructor(private db: DB) {
     }
 
     public async init() {

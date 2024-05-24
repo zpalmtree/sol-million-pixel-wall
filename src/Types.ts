@@ -1,4 +1,4 @@
-import pgPromise, { IDatabase } from 'pg-promise';
+import { IDatabase } from 'pg-promise';
 import { Request, Response } from 'express';
 
 export type DB = IDatabase<object, any>;
