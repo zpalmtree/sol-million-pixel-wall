@@ -1,8 +1,8 @@
 import { Image, StaticCanvas } from 'fabric/node';
 
 import { DB } from './Types.js';
-import { ImageManipulation } from './ImageManipulation';
-import { CANVAS_WIDTH, CANVAS_HEIGHT } from './Constants';
+import { ImageManipulation } from './ImageManipulation.js';
+import { CANVAS_WIDTH, CANVAS_HEIGHT } from './Constants.js';
 
 export class PixelWall {
     private initialized: boolean = false;
