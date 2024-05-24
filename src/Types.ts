@@ -22,6 +22,7 @@ export type ApiKeyGuard = (req: Request, res: Response, endpoint: string, method
 
 export enum ApiMethod {
     POST = 'POST',
+    PUT = 'PUT',
     GET = 'GET',
     DELETE = 'DELETE',
 }
@@ -50,4 +51,9 @@ export interface Endpoint {
     path: string;
 
     method: string;
+}
+
+export interface Coordinate {
+    x: number;
+    y: number;
 }
