@@ -56,7 +56,7 @@ async function loadBricksFromJSON(db: DB) {
                 VALUES ($1, $2, $3, $4, $5)
             `;
 
-            const promises = bricksData.map(brick => {
+            const promises = bricksData.filter((b) => b.assetId).map(brick => {
                 return db.none(
                     insertQuery,
                     [

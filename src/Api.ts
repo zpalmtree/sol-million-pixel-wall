@@ -11,15 +11,16 @@ import {
     ComputeBudgetProgram,
 } from '@solana/web3.js';
 import {
-  SPL_ACCOUNT_COMPRESSION_PROGRAM_ID,
-  SPL_NOOP_PROGRAM_ID,
+    SPL_ACCOUNT_COMPRESSION_PROGRAM_ID,
+    SPL_NOOP_PROGRAM_ID,
+    ConcurrentMerkleTreeAccount,
 } from "@solana/spl-account-compression";
 import {
-  createTransferInstruction,
+    createTransferInstruction,
 } from "@metaplex-foundation/mpl-bubblegum";
 import bs58 from 'bs58';
 
-import { WrappedConnection } from './WrappedConnection';
+import { WrappedConnection } from './WrappedConnection.js';
 import { PixelWall } from './PixelWall.js';
 import {
     DB,
@@ -27,6 +28,7 @@ import {
     ApiMethod,
     ApiRoute,
     Coordinate,
+    Brick,
 } from './Types.js';
 import { logger } from './Logger.js';
 import {
@@ -35,6 +37,7 @@ import {
     JITO_FEE,
     SERVER_PORT,
     PRICE_PER_BRICK,
+    FUNDS_DESTINATION,
 } from './Constants.js';
 import {
     pickRandomItem,
@@ -109,11 +112,12 @@ export class Api {
      * user, transferring SOL from the user to us, along
      * with priority fee and jito fee. We then return the
      * partially signed transaction to the frontend */
+    
     public async purchasePixelSquares(db: DB, req: Request, res: Response) {
         const { coordinates, solAddress } = req.body;
 
         try {
-            let userPublicKey;
+            let userPublicKey: PublicKey;
 
             try {
                 userPublicKey = new PublicKey(solAddress);
@@ -121,10 +125,30 @@ export class Api {
                 return res.status(400).json({ error: 'Invalid SOL address provided.' });
             }
 
-            // Verify all bricks exist and are available for purchase
-            const query = `SELECT x, y, assetId, purchased FROM wall_bricks WHERE (x, y) IN ($1:csv)`;
-            const values = coordinates.map((coord: Coordinate) => `(${coord.x}, ${coord.y})`).join(', ');
-            const bricks = await db.any(query, [values]);
+            const selectedBricks: Coordinate[] = coordinates;
+
+            // Generate placeholders for each coordinate
+            const conditions = selectedBricks.map((_, index) =>
+                `($${index * 2 + 1}, $${index * 2 + 2})`
+            ).join(', ');
+
+            // Flatten the coordinates into a single array of values
+            const values = selectedBricks.flatMap(coord => [coord.x, coord.y]);
+
+            // Construct the query with the generated placeholders
+            const query = `
+                SELECT
+                    x,
+                    y,
+                    assetId AS "assetId",
+                    purchased 
+                FROM
+                    wall_bricks 
+                WHERE
+                    (x, y) IN (${conditions})
+            `;
+
+            const bricks = await db.any(query, values);
 
             if (bricks.length !== coordinates.length) {
                 return res.status(400).json({ error: 'One or more pixel squares do not exist.' });
@@ -138,39 +162,18 @@ export class Api {
 
             // Create transactions for each coordinate
             const transactions = [];
-
             const recentBlockhash = (await this.connection.getLatestBlockhash('finalized')).blockhash;
 
-            for (const brick of bricks) {
+            // Helper function to create a transaction for a brick
+            const createTransaction = async (brick: Brick) => {
                 const transaction = new Transaction();
                 const assetId = brick.assetId;
 
                 transaction.add(this.setComputeUnitLimitInstruction());
-
                 transaction.add(this.setComputeUnitPriceInstruction());
-
-                transaction.add(
-                    this.transferSOLInstruction(
-                        userPublicKey,
-                        this.keypair.publicKey,
-                        PRICE_PER_BRICK,
-                    )
-                );
-
-                transaction.add(
-                    await this.transferNFTInstruction(
-                        assetId,
-                        this.keypair,
-                        userPublicKey
-                    )
-                );
-
-                transaction.add(
-                    this.jitoTipInstruction(
-                        userPublicKey,
-                        JITO_FEE,
-                    )
-                );
+                transaction.add(this.transferSOLInstruction(userPublicKey, new PublicKey(FUNDS_DESTINATION), PRICE_PER_BRICK));
+                transaction.add(await this.transferNFTInstruction(assetId, this.keypair, userPublicKey));
+                transaction.add(this.jitoTipInstruction(userPublicKey, JITO_FEE));
 
                 transaction.feePayer = userPublicKey;
                 transaction.recentBlockhash = recentBlockhash;
@@ -178,7 +181,20 @@ export class Api {
                 // Sign the transaction with our private key
                 transaction.sign(this.keypair);
 
-                transactions.push(transaction.serialize({ requireAllSignatures: false }).toString('base64'));
+                const serialized = transaction.serialize({
+                    requireAllSignatures: false,
+                    verifySignatures: false,
+                });
+
+                return serialized.toString('base64');
+            };
+
+            // Split bricks into chunks of 100 and process each chunk in parallel
+            const chunkSize = 100;
+            for (let i = 0; i < bricks.length; i += chunkSize) {
+                const chunk = bricks.slice(i, i + chunkSize);
+                const chunkTransactions = await Promise.all(chunk.map(createTransaction));
+                transactions.push(...chunkTransactions);
             }
 
             res.status(200).json({ transactions });
@@ -431,11 +447,22 @@ export class Api {
             throw new Error("Proof is empty");
         }
 
+        const merkleTree = new PublicKey(assetProof.tree_id);
+        const merkleTreeAccountRaw = await this.connection.getAccountInfo(merkleTree);
+
+        if (!merkleTreeAccountRaw) {
+            throw new Error('Failed to fetch merkle tree');
+        }
+
+        const merkleTreeData = ConcurrentMerkleTreeAccount.fromBuffer(merkleTreeAccountRaw.data);
+        const canopyDepth = merkleTreeData.getCanopyDepth();
+        const sliceIndex = assetProof.proof.length - canopyDepth;
+
         const proofPath = assetProof.proof.map((node: string) => ({
             pubkey: new PublicKey(node),
             isSigner: false,
             isWritable: false,
-        }));
+        })).slice(0, sliceIndex);
 
         const rpcAsset = await this.connectionWrapper.getAsset(assetId);
 
@@ -448,9 +475,7 @@ export class Api {
         }
 
         const leafNonce = rpcAsset.compression.leaf_id;
-        const treeAuthority = await getBubblegumAuthorityPDA(
-            new PublicKey(assetProof.tree_id),
-        );
+        const treeAuthority = await getBubblegumAuthorityPDA(merkleTree);
         const leafDelegate = rpcAsset.ownership.delegate
             ? new PublicKey(rpcAsset.ownership.delegate)
             : new PublicKey(rpcAsset.ownership.owner);
