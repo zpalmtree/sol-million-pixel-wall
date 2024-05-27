@@ -2,6 +2,9 @@ import express, { Request, Response } from 'express';
 import { Server } from 'http';
 import cors from 'cors';
 import { match } from 'path-to-regexp';
+import fetch from 'node-fetch';
+import * as fs from 'fs/promises';
+import * as url from 'url';
 import {
     Transaction,
     SystemProgram,
@@ -19,6 +22,7 @@ import {
     createTransferInstruction,
 } from "@metaplex-foundation/mpl-bubblegum";
 import bs58 from 'bs58';
+import { v4 as uuidv4 } from 'uuid';
 
 import { WrappedConnection } from './WrappedConnection.js';
 import { PixelWall } from './PixelWall.js';
@@ -29,6 +33,7 @@ import {
     ApiRoute,
     Coordinate,
     Brick,
+    BrickImage,
 } from './Types.js';
 import { logger } from './Logger.js';
 import {
@@ -43,7 +48,10 @@ import {
     pickRandomItem,
     getBubblegumAuthorityPDA,
     bufferToArray,
+    verifySignature,
 } from './Utils.js';
+
+const __dirname = url.fileURLToPath(new URL('.', import.meta.url));
 
 export class Api {
     private httpServer = express();
@@ -193,8 +201,17 @@ export class Api {
             const chunkSize = 100;
             for (let i = 0; i < bricks.length; i += chunkSize) {
                 const chunk = bricks.slice(i, i + chunkSize);
-                const chunkTransactions = await Promise.all(chunk.map(createTransaction));
-                transactions.push(...chunkTransactions);
+
+                try {
+                    const chunkTransactions = await Promise.all(chunk.map(createTransaction));
+                    transactions.push(...chunkTransactions);
+                } catch (err: any) {
+                    res.status(400).json({
+                        error: err.toString(),
+                    });
+
+                    return;
+                }
             }
 
             res.status(200).json({ transactions });
@@ -215,12 +232,111 @@ export class Api {
      * store the image data. We will then invalidate the image cache,
      * and return success to the user */
     public async modifyDefinedPurchasedPixels(db: DB, req: Request, res: Response) {
+        return res.status(200).json({
+            success: true,
+        });
     }
 
-    /* This function will work the same as modifyDefinedPurchasedPixels, but
-     * this function does not cost any SOL to interact with - this is for initially
-     * setting the image after the user has already purchased the pixels */
+    /* This function will take an array of images, with an x, y, and image key,
+     * a sol address, and a signed message "`I am signing this message to confirm that ${publicKey.toString()} can upload images to the million pixel wall`;",
+     * this function will verify the signature, verify the pixels exist in the DB and currently all have no image defined,
+     * verify the address is holding the NFTs associated with these pixels, using the getDigitalStandardItems API,
+     * then store the image data the user uploaded. */
     public async modifyUndefinedPurchasedPixels(db: DB, req: Request, res: Response) {
+        const { images, solAddress, signedMessage } = req.body;
+
+        try {
+            let userPublicKey: PublicKey;
+
+            try {
+                userPublicKey = new PublicKey(solAddress);
+            } catch (e) {
+                return res.status(400).json({ error: 'Invalid SOL address provided.' });
+            }
+
+            // Step 1: Verify the signed message
+            const message = `I am signing this message to confirm that ${userPublicKey.toString()} can upload images to the million pixel wall`;
+
+            const isValidSignature = await verifySignature({
+                address: solAddress,
+                toSign: new TextEncoder().encode(message),
+                signature: signedMessage,
+            });
+
+            if (!isValidSignature) {
+                return res.status(400).json({ error: 'Invalid signature.' });
+            }
+
+            // Step 2: Verify that the pixels exist in the DB and currently have no image defined
+            const conditions = images.map((_: BrickImage, index: number) =>
+                `($${index * 2 + 1}, $${index * 2 + 2})`
+            ).join(', ');
+
+            const values = images.flatMap((image: BrickImage) => [image.x, image.y]);
+
+            const query = `
+                SELECT
+                    x,
+                    y,
+                    assetId AS "assetId",
+                    image_location 
+                FROM
+                    wall_bricks 
+                WHERE
+                    (x, y) IN (${conditions})
+            `;
+
+            const bricks = await db.any(query, values);
+
+            if (bricks.length !== images.length) {
+                return res.status(400).json({ error: 'One or more pixel squares do not exist.' });
+            }
+
+            const definedImageBricks = bricks.filter(brick => brick.image_location);
+            if (definedImageBricks.length > 0) {
+                return res.status(400).json({ error: 'One or more pixel squares already have an image defined.', definedImageBricks });
+            }
+
+            // Step 3: Verify the address is holding the NFTs associated with these pixels
+            const assetIds = bricks.map(brick => brick.assetId);
+            const digitalItems = await this.getDigitalStandardItems(userPublicKey);
+            const ownedAssetIds = digitalItems.map(item => item.assetId);
+
+            const missingAssets = assetIds.filter(assetId => !ownedAssetIds.includes(assetId));
+
+            if (missingAssets.length > 0) {
+                return res.status(400).json({ error: 'Address does not hold the required NFTs for these pixels.', missingAssets });
+            }
+
+            // Step 4: Store the image data on disk and update the database with the image location
+            const updateQueries = await Promise.all(images.map(async (image: BrickImage) => {
+                const imageName = `${uuidv4()}.png`;
+                const imagePath = `${__dirname}../images/${imageName}`;
+
+                // Save the image to disk
+                const base64Data = image.image.replace(/^data:image\/png;base64,/, "");
+                await fs.writeFile(imagePath, base64Data, 'base64');
+
+                // Update the database with the image location
+                return db.none(
+                    `UPDATE wall_bricks
+                    SET
+                        image_location = $1,
+                        purchased = TRUE
+                    WHERE
+                        x = $2
+                        AND y = $3`,
+                    [ imagePath, image.x, image.y ]
+                );
+            }));
+
+            await Promise.all(updateQueries);
+
+            return res.status(200).json({ success: true });
+        } catch (error) {
+            logger.error('Error modifying undefined purchased pixels:', error);
+            return res.status(500).json({ error: 'Internal server error.' });
+        }
     }
 
     /* This function will take a transaction signature as input,
@@ -228,6 +344,9 @@ export class Api {
      * it is legitimate, mark the pixels as purchased in the DB,
      * and store any related info in the DB */
     public async flagPixelsAsPurchased(db: DB, req: Request, res: Response) {
+        return res.status(200).json({
+            success: true,
+        });
     }
 
     /* This function will iterate through the saved pixels / blocks,
@@ -236,6 +355,9 @@ export class Api {
      * then return the image to the caller. */
     public async getWallImage(db: DB, req: Request, res: Response) {
         const renderedImage = this.pixelWall.renderImage();
+        return res.status(200).json({
+            success: true,
+        });
     }
 
     public async start() {
@@ -467,11 +589,7 @@ export class Api {
         const rpcAsset = await this.connectionWrapper.getAsset(assetId);
 
         if (rpcAsset.ownership.owner !== owner.publicKey.toBase58()) {
-            throw new Error(
-                `NFT is not owned by the expected owner. Expected ${owner.publicKey.toBase58()} but got ${
-                    rpcAsset.ownership.owner
-                }.`,
-            );
+            throw new Error('One or more pixel squares are already purchased. Try refreshing the page, your purchase may have already gone through.');
         }
 
         const leafNonce = rpcAsset.compression.leaf_id;
@@ -505,5 +623,67 @@ export class Api {
         );
 
         return transferIx;
+    }
+
+    private async getDigitalStandardItems(address: PublicKey): Promise<any[]> {
+        console.log(`Loading compressed NFTs`);
+
+        let compressedNFTs: any[] = [];
+
+        try {
+            let page = 1;
+
+            while (true) {
+                const response = await fetch(process.env.RPC_ADDRESS!, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        jsonrpc: '2.0',
+                        id: '1',
+                        method: 'getAssetsByOwner',
+                        params: {
+                            ownerAddress: address.toString(),
+                            page,
+                            limit: 1000,
+                            displayOptions: {
+                            },
+                        },
+                    }),
+                });
+
+                if (!response.ok) {
+                    console.log(`Failed to fetch compressed NFTs: ${response.status}`);
+                    break;
+                }
+
+                const rawData = await response.json();
+
+                if (rawData.error) {
+                    console.log(`Error fetching compressed NFTs: ${rawData.error.message}`);
+                    break;
+                }
+
+                const unburnt = rawData?.result?.items?.filter((i: any) => !i.burnt);
+
+                compressedNFTs = compressedNFTs.concat(unburnt.filter((c: any) => c.compression?.compressed));
+
+                /* Are there more pages to fetch? */
+                if (rawData.result.total < rawData.result.limit) {
+                    break;
+                }
+
+                page++;
+            }
+        } catch (err) {
+            console.log(`Error fetching compressed NFTs: ${err}`);
+        }
+    
+        return compressedNFTs.map((c) => {
+            return {
+                assetId: c.id,
+            }
+        });
     }
 }

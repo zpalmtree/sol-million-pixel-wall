@@ -57,3 +57,7 @@ export interface Coordinate {
     x: number;
     y: number;
 }
+
+export interface BrickImage extends Coordinate {
+    image: string;
+}
