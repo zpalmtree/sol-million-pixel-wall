@@ -61,3 +61,8 @@ export interface Coordinate {
 export interface BrickImage extends Coordinate {
     image: string;
 }
+
+export interface BrickInfo extends Coordinate {
+    name: string;
+    purchased: boolean;
+}

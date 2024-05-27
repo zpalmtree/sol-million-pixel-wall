@@ -23,6 +23,10 @@ import {
 } from "@metaplex-foundation/mpl-bubblegum";
 import bs58 from 'bs58';
 import { v4 as uuidv4 } from 'uuid';
+import {
+    StaticCanvas,
+    Image,
+} from 'fabric/node';
 
 import { WrappedConnection } from './WrappedConnection.js';
 import { PixelWall } from './PixelWall.js';
@@ -34,6 +38,7 @@ import {
     Coordinate,
     Brick,
     BrickImage,
+    BrickInfo,
 } from './Types.js';
 import { logger } from './Logger.js';
 import {
@@ -43,6 +48,10 @@ import {
     SERVER_PORT,
     PRICE_PER_BRICK,
     FUNDS_DESTINATION,
+    BRICK_WIDTH,
+    BRICK_HEIGHT,
+    CANVAS_WIDTH,
+    CANVAS_HEIGHT,
 } from './Constants.js';
 import {
     pickRandomItem,
@@ -86,16 +95,20 @@ export class Api {
             description: 'Flag the pixels as purchased',
         },
         {
-            path: '/wall',
-            routeImplementation: this.getWallImage,
+            path: '/info',
+            routeImplementation: this.getWallInfo,
             method: ApiMethod.GET,
-            description: 'Get an image of the current pixel wall',
+            description: 'Get an image of the wall, along with purchased pixels info',
         },
     ];
 
     private handlers: ApiRoute[];
 
     private handlerMap: Map<string, ApiRoute>;
+
+    private cachedImage: string | undefined;
+
+    private cachedBricks: BrickInfo[] | undefined = undefined; 
 
     constructor(
         private pixelWall: PixelWall,
@@ -314,6 +327,7 @@ export class Api {
                 const imagePath = `${__dirname}../images/${imageName}`;
 
                 // Save the image to disk
+                // TODO: Validate size?
                 const base64Data = image.image.replace(/^data:image\/png;base64,/, "");
                 await fs.writeFile(imagePath, base64Data, 'base64');
 
@@ -331,6 +345,8 @@ export class Api {
             }));
 
             await Promise.all(updateQueries);
+
+            this.cachedImage = undefined;
 
             return res.status(200).json({ success: true });
         } catch (error) {
@@ -352,12 +368,76 @@ export class Api {
     /* This function will iterate through the saved pixels / blocks,
      * add them to the fabric js canvas, render the image to file,
      * maybe cache it in some way to avoid multiple renders, and
-     * then return the image to the caller. */
-    public async getWallImage(db: DB, req: Request, res: Response) {
-        const renderedImage = this.pixelWall.renderImage();
-        return res.status(200).json({
-            success: true,
-        });
+     * then return the image to the caller. It will also return info
+     * on bricks that have been purchased. */
+    public async getWallInfo(db: DB, req: Request, res: Response) {
+        try {
+            if (this.cachedImage && this.cachedBricks) {
+                return res.status(200).json({
+                    image: this.cachedImage,
+                    bricks: this.cachedBricks,
+                });
+            }
+
+            // Query the database to get all pixels/blocks with their purchase and image info
+            const query = `
+                SELECT x, y, image_location, purchased
+                FROM wall_bricks
+            `;
+            const bricks = await db.any(query);
+
+            // Create a Fabric.js canvas
+            const canvas = new StaticCanvas(undefined, {
+                width: CANVAS_WIDTH,
+                height: CANVAS_HEIGHT,
+            });
+
+            // Add each brick with an image to the canvas
+            await Promise.all(bricks.map(async (brick) => {
+                if (brick.image_location) {
+                    console.log(`Adding ${brick.image_location} to canvas`);
+
+                    const image = await Image.fromURL(`file://${brick.image_location}`);
+
+                    image.set({
+                        left: brick.x * BRICK_WIDTH,
+                        top: brick.y * BRICK_HEIGHT,
+                        selectable: false,
+                    });
+
+                    canvas.add(image);
+                }
+            }));
+
+            // Render the canvas to a data URL
+            const dataURL = canvas.toDataURL({
+                format: 'png',
+                quality: 1.0,
+                multiplier: 1,
+            });
+
+            const imageData = dataURL.replace(/^data:image\/png;base64,/, '');
+            const imagePath = `${__dirname}../images/test.png`;
+            await fs.writeFile(imagePath, Buffer.from(imageData, 'base64'));
+
+            // Cache the image and bricks info
+            this.cachedImage = dataURL;
+            this.cachedBricks = bricks.map(brick => ({
+                x: brick.x,
+                y: brick.y,
+                purchased: brick.purchased,
+                name: `${brick.x},${brick.y}`,
+            }));
+
+            // Return the image and purchased brick information
+            return res.status(200).json({
+                image: this.cachedImage,
+                bricks: this.cachedBricks,
+            });
+        } catch (error) {
+            logger.error('Error getting wall info:', error);
+            return res.status(500).json({ error: 'Internal server error.' });
+        }
     }
 
     public async start() {
@@ -626,8 +706,6 @@ export class Api {
     }
 
     private async getDigitalStandardItems(address: PublicKey): Promise<any[]> {
-        console.log(`Loading compressed NFTs`);
-
         let compressedNFTs: any[] = [];
 
         try {

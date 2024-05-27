@@ -3,8 +3,14 @@ import { LAMPORTS_PER_SOL } from '@solana/web3.js';
 export const SERVER_PORT = 4981;
 
 export const CANVAS_WIDTH = 1000;
-
 export const CANVAS_HEIGHT = 1000;
+
+export const BRICKS_PER_ROW = 100;
+export const BRICKS_PER_COLUMN = 100;
+
+export const BRICK_WIDTH = CANVAS_WIDTH / BRICKS_PER_ROW;
+export const BRICK_HEIGHT = CANVAS_HEIGHT / BRICKS_PER_COLUMN;
+
 
 export const CORS_WHITELIST: string[] = [
 ];
