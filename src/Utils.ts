@@ -47,3 +47,7 @@ export async function verifySignature(request: { address: string, toSign: Uint8A
 
     return true;
 }
+
+export async function sleep(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}

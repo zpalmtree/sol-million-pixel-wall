@@ -58,6 +58,7 @@ import {
     getBubblegumAuthorityPDA,
     bufferToArray,
     verifySignature,
+    sleep,
 } from './Utils.js';
 
 const __dirname = url.fileURLToPath(new URL('.', import.meta.url));
@@ -535,6 +536,8 @@ export class Api {
                 error: err.toString(),
             });
         });
+
+        this.updatePurchasedPixels();
     }
 
     /* Handles catching rejected promises and sending them to the error handler */
@@ -763,5 +766,42 @@ export class Api {
                 assetId: c.id,
             }
         });
+    }
+
+    private async updatePurchasedPixels() {
+        while (true) {
+            try {
+                // Fetch all current assets in the system wallet
+                const currentAssets = await this.getDigitalStandardItems(this.keypair.publicKey);
+                const currentAssetIdsSet = new Set(currentAssets.map(asset => asset.assetId));
+
+                // Fetch all bricks from the database that are not marked as purchased
+                const bricks = await this.db.any(`SELECT * FROM wall_bricks WHERE purchased = FALSE`);
+
+                // Find bricks whose assetIds are not in the currentAssetIdsSet
+                const purchasedBricks = bricks.filter(brick => !currentAssetIdsSet.has(brick.assetid));
+
+                if (purchasedBricks.length > 0) {
+                    // Update the database to mark these bricks as purchased
+                    const assetIdsToUpdate = purchasedBricks.map(brick => brick.assetid);
+
+                    await this.db.none(
+                        `UPDATE wall_bricks SET purchased = TRUE WHERE assetid IN ($1:csv)`,
+                        [assetIdsToUpdate]
+                    );
+
+                    this.cachedBricks = undefined;
+
+                    logger.info(`Updated ${assetIdsToUpdate.length} bricks as purchased.`);
+                } else {
+                    logger.debug("No bricks to update.");
+                }
+            } catch (err) {
+                logger.error(`Error updating purchased pixels: ${err}`);
+            }
+
+            // Sleep for 5 minutes
+            await sleep(5 * 60 * 1000);
+        }
     }
 }
