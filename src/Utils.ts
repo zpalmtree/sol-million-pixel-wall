@@ -1,6 +1,5 @@
 import { PROGRAM_ID } from "@metaplex-foundation/mpl-bubblegum";
 import { PublicKey } from '@solana/web3.js';
-import { decode } from "@stablelib/base64";
 import tweetnacl from "tweetnacl";
 
 export function pickRandomItem<T>(array: T[]): T {

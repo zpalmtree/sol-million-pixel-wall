@@ -387,23 +387,28 @@ export class Api {
             `;
             const bricks = await db.any(query);
 
+            const multiplier = 10;
+
             // Create a Fabric.js canvas
             const canvas = new StaticCanvas(undefined, {
-                width: CANVAS_WIDTH,
-                height: CANVAS_HEIGHT,
+                width: CANVAS_WIDTH * multiplier,
+                height: CANVAS_HEIGHT * multiplier,
             });
 
             // Add each brick with an image to the canvas
             await Promise.all(bricks.map(async (brick) => {
                 if (brick.image_location) {
-                    console.log(`Adding ${brick.image_location} to canvas`);
-
                     const image = await Image.fromURL(`file://${brick.image_location}`);
 
+                    /* Downscale */
+                    image.scaleToWidth(BRICK_WIDTH * multiplier);
+                    image.scaleToHeight(BRICK_HEIGHT * multiplier);
+
                     image.set({
-                        left: brick.x * BRICK_WIDTH,
-                        top: brick.y * BRICK_HEIGHT,
+                        left: brick.x * BRICK_WIDTH * multiplier,
+                        top: brick.y * BRICK_HEIGHT * multiplier,
                         selectable: false,
+                        objectCaching: true,
                     });
 
                     canvas.add(image);
@@ -418,7 +423,7 @@ export class Api {
             });
 
             const imageData = dataURL.replace(/^data:image\/png;base64,/, '');
-            const imagePath = `${__dirname}../images/test.png`;
+            const imagePath = `${__dirname}../images/canvas.png`;
             await fs.writeFile(imagePath, Buffer.from(imageData, 'base64'));
 
             // Cache the image and bricks info
@@ -494,7 +499,7 @@ export class Api {
         this.httpServer.use(this.asyncWrapper(this.guardMiddleware.bind(this)));
 
         /* Parse bodies as json */
-        this.httpServer.use(express.json());
+        this.httpServer.use(express.json({ limit: '50MB' }));
 
         /* Attach handlers */
         for (const handler of this.handlers) {
