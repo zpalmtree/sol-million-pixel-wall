@@ -101,6 +101,12 @@ export class Api {
             method: ApiMethod.GET,
             description: 'Get an image of the wall, along with purchased pixels info',
         },
+        {
+            path: '/owned',
+            routeImplementation: this.getUserPixels,
+            method: ApiMethod.POST,
+            description: 'Get pixels owned by a specific user',
+        },
     ];
 
     private handlers: ApiRoute[];
@@ -352,6 +358,57 @@ export class Api {
             return res.status(200).json({ success: true });
         } catch (error) {
             logger.error('Error modifying undefined purchased pixels:', error);
+            return res.status(500).json({ error: 'Internal server error.' });
+        }
+    }
+
+    public async getUserPixels(db: DB, req: Request, res: Response) {
+        const { solAddress } = req.body;
+
+        try {
+            let userPublicKey: PublicKey;
+
+            try {
+                userPublicKey = new PublicKey(solAddress);
+            } catch (e) {
+                return res.status(400).json({ error: 'Invalid SOL address provided.' });
+            }
+
+            // Step 1: Verify the address and fetch the user's assets
+            const digitalItems = await this.getDigitalStandardItems(userPublicKey);
+
+            if (!digitalItems || digitalItems.length === 0) {
+                return res.status(200).json({ success: true, bricks: [] });
+            }
+
+            const assetIds = digitalItems.map(item => item.assetId);
+
+            // Step 2: Cross-reference the user's assets with the database to find valid bricks
+            const query = `
+                SELECT
+                    x,
+                    y,
+                    assetId AS "assetId",
+                    image_location IS NULL AS "hasImage"
+                FROM
+                    wall_bricks
+                WHERE
+                    assetId IN ($1:csv)
+            `;
+
+            const userBricks = await db.any(query, [assetIds]);
+
+            return res.status(200).json({
+                success: true,
+                bricks: userBricks.map((b) => {
+                    return {
+                        ...b,
+                        name: `${b.x},${b.y}`,
+                    };
+                }),
+            });
+        } catch (error) {
+            logger.error('Error fetching user pixels:', error);
             return res.status(500).json({ error: 'Internal server error.' });
         }
     }
