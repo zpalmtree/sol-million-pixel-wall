@@ -1,6 +1,15 @@
 import { PROGRAM_ID } from "@metaplex-foundation/mpl-bubblegum";
-import { PublicKey } from '@solana/web3.js';
 import tweetnacl from "tweetnacl";
+import {
+    PublicKey,
+    TransactionInstruction,
+    SystemProgram,
+    SystemInstruction,
+    Transaction,
+    MessageAccountKeys,
+    MessageCompiledInstruction,
+} from '@solana/web3.js';
+import { Buffer } from 'buffer';
 
 export function pickRandomItem<T>(array: T[]): T {
     return array[Math.floor(Math.random() * array.length)];
@@ -49,4 +58,20 @@ export async function verifySignature(request: { address: string, toSign: Uint8A
 
 export async function sleep(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+export function decompileInstruction(instruction: MessageCompiledInstruction, txData: any): TransactionInstruction {
+    const messageAccountKeys = new MessageAccountKeys(txData.staticAccountKeys);
+
+    return new TransactionInstruction({
+        data: Buffer.from(instruction.data),
+        programId: new PublicKey(messageAccountKeys.get(instruction.programIdIndex)!),
+        keys: instruction.accountKeyIndexes.map((accountIndex: any) => {
+            return {
+                isSigner: txData.isAccountSigner(accountIndex),
+                isWritable: txData.isAccountWritable(accountIndex),
+                pubkey: messageAccountKeys.get(accountIndex)!,
+            };
+        }),
+    });
 }

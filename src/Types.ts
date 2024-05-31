@@ -66,3 +66,8 @@ export interface BrickInfo extends Coordinate {
     name: string;
     purchased: boolean;
 }
+
+export interface CompressedNFT {
+    image: string;
+    assetId: string;
+}

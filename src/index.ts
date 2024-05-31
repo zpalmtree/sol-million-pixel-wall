@@ -20,7 +20,11 @@ async function main() {
         return;
     }
 
-    const connection = new Connection(process.env.RPC_ADDRESS);
+    const connection = new Connection(process.env.RPC_ADDRESS, {
+        confirmTransactionInitialTimeout: 120 * 1000,
+        commitment: 'confirmed',
+    });
+
     const connectionWrapper = new WrappedConnection(process.env.RPC_ADDRESS);
     const wallet = await loadSeed(process.env.PRIVATE_KEY_PATH);
 

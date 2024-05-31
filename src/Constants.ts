@@ -19,6 +19,7 @@ export const JITO_FEE = 30_000;
 
 //export const PRICE_PER_BRICK = 0.2 * LAMPORTS_PER_SOL;
 export const PRICE_PER_BRICK = 0.001 * LAMPORTS_PER_SOL;
+export const PRICE_PER_BRICK_EDIT = 0.001 * LAMPORTS_PER_SOL;
 
 //export const FUNDS_DESTINATION = '9hLBcTppq5DUziXTnuUtorbzKSDzM8cFz3FSvUgD8Nsf';
 export const FUNDS_DESTINATION = '9KvFNdRAQGC5LgvmjkZMkc3yfvohwYkoch5KpFgGLLdT';

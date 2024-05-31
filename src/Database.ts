@@ -37,6 +37,7 @@ export async function createTables(db: DB) {
 
     await createWallBricksTable(db);
     await loadBricksFromJSON(db);
+    await createEditBricksTable(db);
 }
 
 async function loadBricksFromJSON(db: DB) {
@@ -96,6 +97,18 @@ async function createWallBricksTable(db: DB) {
             image_location VARCHAR(255),
 
             CONSTRAINT unique_coordinates UNIQUE(x, y)
+        )`
+    );
+}
+
+async function createEditBricksTable(db: DB) {
+    await db.none(
+        `CREATE TABLE IF NOT EXISTS edit_bricks (
+            id BIGSERIAL PRIMARY KEY,
+
+            username VARCHAR(255) NOT NULL,
+
+            transaction_hash VARCHAR(255) NOT NULL UNIQUE
         )`
     );
 }

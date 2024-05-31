@@ -12,6 +12,8 @@ import {
     Keypair,
     Connection,
     ComputeBudgetProgram,
+    TransactionResponse,
+    SystemInstruction,
 } from '@solana/web3.js';
 import {
     SPL_ACCOUNT_COMPRESSION_PROGRAM_ID,
@@ -39,6 +41,7 @@ import {
     Brick,
     BrickImage,
     BrickInfo,
+    CompressedNFT,
 } from './Types.js';
 import { logger } from './Logger.js';
 import {
@@ -47,6 +50,7 @@ import {
     JITO_FEE,
     SERVER_PORT,
     PRICE_PER_BRICK,
+    PRICE_PER_BRICK_EDIT,
     FUNDS_DESTINATION,
     BRICK_WIDTH,
     BRICK_HEIGHT,
@@ -59,6 +63,7 @@ import {
     bufferToArray,
     verifySignature,
     sleep,
+    decompileInstruction,
 } from './Utils.js';
 
 const __dirname = url.fileURLToPath(new URL('.', import.meta.url));
@@ -73,39 +78,39 @@ export class Api {
     private routeData: RouteData[] = [
         {
             path: '/purchase',
-            routeImplementation: this.purchasePixelSquares,
+            routeImplementation: this.purchaseBrickSquares,
             method: ApiMethod.POST,
-            description: 'Get transaction to purchase pixel squares',
+            description: 'Get transaction to purchase bricks',
+        },
+        {
+            path: '/purchase/modify',
+            routeImplementation: this.purchaseBrickModify,
+            method: ApiMethod.POST,
+            description: 'Get transaction to modify brick art',
+        },
+        {
+            path: '/image/modify',
+            routeImplementation: this.modifyDefinedPurchasedBricks,
+            method: ApiMethod.POST,
+            description: 'Modify image data of bricks owned by user',
         },
         {
             path: '/image',
-            routeImplementation: this.modifyDefinedPurchasedPixels,
-            method: ApiMethod.PUT,
-            description: 'Update image data of pixels owned by user',
-        },
-        {
-            path: '/image',
-            routeImplementation: this.modifyUndefinedPurchasedPixels,
+            routeImplementation: this.modifyUndefinedPurchasedBricks,
             method: ApiMethod.POST,
-            description: 'Create image data of pixels owned by user',
-        },
-        {
-            path: '/purchase-complete',
-            routeImplementation: this.flagPixelsAsPurchased,
-            method: ApiMethod.POST,
-            description: 'Flag the pixels as purchased',
+            description: 'Create image data of bricks owned by user',
         },
         {
             path: '/info',
             routeImplementation: this.getWallInfo,
             method: ApiMethod.GET,
-            description: 'Get an image of the wall, along with purchased pixels info',
+            description: 'Get an image of the wall, along with purchased bricks info',
         },
         {
             path: '/owned',
-            routeImplementation: this.getUserPixels,
+            routeImplementation: this.getUserBricks,
             method: ApiMethod.POST,
-            description: 'Get pixels owned by a specific user',
+            description: 'Get bricks owned by a specific user',
         },
     ];
 
@@ -134,14 +139,103 @@ export class Api {
         this.handlerMap = new Map(this.handlers.map((h) => [`${h.path}-${h.method}`, h]));
     }
 
+    public async purchaseBrickModify(db: DB, req: Request, res: Response) {
+        const { coordinates, solAddress } = req.body;
+
+        try {
+            let userPublicKey: PublicKey;
+
+            try {
+                userPublicKey = new PublicKey(solAddress);
+            } catch (e) {
+                return res.status(400).json({ error: 'Invalid SOL address provided.' });
+            }
+
+            const selectedBricks: Coordinate[] = coordinates;
+
+            // Generate placeholders for each coordinate
+            const conditions = selectedBricks.map((_, index) =>
+                `($${index * 2 + 1}, $${index * 2 + 2})`
+            ).join(', ');
+
+            // Flatten the coordinates into a single array of values
+            const values = selectedBricks.flatMap(coord => [coord.x, coord.y]);
+
+            // Construct the query with the generated placeholders
+            const query = `
+                SELECT
+                    x,
+                    y,
+                    assetId AS "assetId",
+                    purchased,
+                    image_location 
+                FROM
+                    wall_bricks 
+                WHERE
+                    (x, y) IN (${conditions})
+            `;
+
+            const bricks = await db.any(query, values);
+
+            if (bricks.length !== coordinates.length) {
+                return res.status(400).json({ error: 'One or more bricks do not exist.' });
+            }
+
+            const nonOwnedBricks = bricks.filter(brick => !brick.purchased);
+            if (nonOwnedBricks.length > 0) {
+                return res.status(400).json({ error: 'One or more bricks are not owned by the user.', nonOwnedBricks });
+            }
+
+            const bricksWithoutImage = bricks.filter(brick => !brick.image_location);
+            if (bricksWithoutImage.length > 0) {
+                return res.status(400).json({ error: 'One or more bricks do not have an image defined.', bricksWithoutImage });
+            }
+
+            // Verify the address is holding the NFTs associated with these bricks
+            const assetIds = bricks.map(brick => brick.assetId);
+            const digitalItems = await this.getDigitalStandardItems(userPublicKey);
+            const ownedAssetIds = digitalItems.map(item => item.assetId);
+
+            const missingAssets = assetIds.filter(assetId => !ownedAssetIds.includes(assetId));
+
+            if (missingAssets.length > 0) {
+                return res.status(400).json({ error: 'Address does not hold the required NFTs for these bricks.', missingAssets });
+            }
+
+            // Create a single transaction for all brick modifications
+            const transaction = new Transaction();
+            const recentBlockhash = (await this.connection.getLatestBlockhash('finalized')).blockhash;
+            const totalSolPayment = PRICE_PER_BRICK_EDIT * bricks.length;
+
+            transaction.add(this.setComputeUnitLimitInstruction());
+            transaction.add(this.setComputeUnitPriceInstruction());
+            transaction.add(this.transferSOLInstruction(userPublicKey, new PublicKey(FUNDS_DESTINATION), totalSolPayment));
+            transaction.add(this.jitoTipInstruction(userPublicKey, JITO_FEE));
+
+            transaction.feePayer = userPublicKey;
+            transaction.recentBlockhash = recentBlockhash;
+
+            const serialized = transaction.serialize({
+                requireAllSignatures: false,
+                verifySignatures: false,
+            });
+
+            const serializedTransaction = serialized.toString('base64');
+
+            res.status(200).json({ transactions: [serializedTransaction] });
+        } catch (error) {
+            logger.error('Error modifying bricks:', error);
+            res.status(500).json({ error: 'Internal server error.' });
+        }
+    }
+
     /* This function will take the coordinate to purchase,
      * check they haven't been purchased already,
      * then create transaction(s) transferring the NFT to the
      * user, transferring SOL from the user to us, along
      * with priority fee and jito fee. We then return the
      * partially signed transaction to the frontend */
-    
-    public async purchasePixelSquares(db: DB, req: Request, res: Response) {
+    public async purchaseBrickSquares(db: DB, req: Request, res: Response) {
         const { coordinates, solAddress } = req.body;
 
         try {
@@ -179,13 +273,13 @@ export class Api {
             const bricks = await db.any(query, values);
 
             if (bricks.length !== coordinates.length) {
-                return res.status(400).json({ error: 'One or more pixel squares do not exist.' });
+                return res.status(400).json({ error: 'One or more bricks do not exist.' });
             }
 
             const unavailableBricks = bricks.filter(brick => brick.purchased);
 
             if (unavailableBricks.length > 0) {
-                return res.status(400).json({ error: 'One or more pixel squares are already purchased.', unavailableBricks });
+                return res.status(400).json({ error: 'One or more bricks are already purchased.', unavailableBricks });
             }
 
             // Create transactions for each coordinate
@@ -236,33 +330,180 @@ export class Api {
 
             res.status(200).json({ transactions });
         } catch (error) {
-            logger.error('Error purchasing pixel squares:', error);
+            logger.error('Error purchasing bricks:', error);
             res.status(500).json({ error: 'Internal server error.' });
         }
     }
 
-    /* This function will take the coordinates to update,
-     * a signed transaction / on chain transaction hash giving us
-     * sol. We will either ensure it lands on chain or validate it
-     * is legitimate. A signed message and the public key must be
-     * included. We will fetch the NFTs of the user, and verify
-     * that they own the NFTs corresponding to the selected pixels.
-     * If they do, we will validate the image is valid, split them
-     * into blocks corresponding to the image boundaries, and
-     * store the image data. We will then invalidate the image cache,
-     * and return success to the user */
-    public async modifyDefinedPurchasedPixels(db: DB, req: Request, res: Response) {
-        return res.status(200).json({
-            success: true,
-        });
+    public async modifyDefinedPurchasedBricks(db: DB, req: Request, res: Response) {
+        const { images, solAddress, signature } = req.body;
+
+        try {
+            let userPublicKey: PublicKey;
+
+            try {
+                userPublicKey = new PublicKey(solAddress);
+            } catch (e) {
+                return res.status(400).json({ error: 'Invalid SOL address provided.' });
+            }
+
+            // Step 1: Verify that the bricks exist in the DB and currently have an image defined
+            const conditions = images.map((_: BrickImage, index: number) =>
+                `($${index * 2 + 1}, $${index * 2 + 2})`
+            ).join(', ');
+
+            const values = images.flatMap((image: BrickImage) => [image.x, image.y]);
+
+            const query = `
+                SELECT
+                    x,
+                    y,
+                    assetId AS "assetId",
+                    image_location 
+                FROM
+                    wall_bricks 
+                WHERE
+                    (x, y) IN (${conditions})
+            `;
+
+            const bricks = await db.any(query, values);
+
+            if (bricks.length !== images.length) {
+                return res.status(400).json({ error: 'One or more bricks do not exist.' });
+            }
+
+            const undefinedImageBricks = bricks.filter(brick => !brick.image_location);
+            if (undefinedImageBricks.length > 0) {
+                return res.status(400).json({ error: 'One or more bricks do not have an image defined.', undefinedImageBricks });
+            }
+
+            // Verify the address is holding the NFTs associated with these bricks
+            const assetIds = bricks.map(brick => brick.assetId);
+            const digitalItems = await this.getDigitalStandardItems(userPublicKey);
+            const ownedAssetIds = digitalItems.map(item => item.assetId);
+
+            const missingAssets = assetIds.filter(assetId => !ownedAssetIds.includes(assetId));
+
+            if (missingAssets.length > 0) {
+                return res.status(400).json({ error: 'Address does not hold the required NFTs for these bricks.', missingAssets });
+            }
+
+            // Check that the transaction has not been used before in the edit_bricks table
+            const existingTransaction = await db.oneOrNone(
+                `SELECT 1 FROM edit_bricks WHERE transaction_hash = $1`, [signature]
+            );
+
+            if (existingTransaction) {
+                return res.status(400).json({ error: 'Transaction has already been used.' });
+            }
+
+            // Step 2: Fetch the transaction with retries
+            const fetchTransaction = async (retries: number): Promise<TransactionResponse | null> => {
+                for (let i = 0; i < retries; i++) {
+                    const transaction = await this.connection.getTransaction(signature);
+                    if (transaction) {
+                        return transaction;
+                    }
+                    await new Promise(resolve => setTimeout(resolve, 2000));
+                }
+                return null;
+            };
+
+            const transaction = await fetchTransaction(15);
+
+            if (!transaction) {
+                return res.status(400).json({ error: 'Transaction not found.' });
+            }
+
+            // Step 3: Validate the transaction is sending the correct amount of SOL to FUNDS_DESTINATION
+            const totalSolPayment = BigInt(PRICE_PER_BRICK_EDIT * images.length);
+            const fundsDestinationPublicKey = new PublicKey(FUNDS_DESTINATION);
+            let isValidTransaction = false;
+
+            const txData = transaction.transaction.message;
+
+            for (const instruction of txData.compiledInstructions) {
+                let decompiledInstruction;
+
+                try {
+                    decompiledInstruction = decompileInstruction(instruction, txData);
+                } catch (err) {
+                    logger.info(`Failed to decompile instruction: ${JSON.stringify(instruction)} - ${err}`);
+                    continue;
+                }
+
+                if (decompiledInstruction.programId.equals(SystemProgram.programId)) {
+                    try {
+                        const parsedInstruction = SystemInstruction.decodeTransfer(decompiledInstruction);
+                        if (parsedInstruction.toPubkey.equals(fundsDestinationPublicKey) &&
+                            parsedInstruction.fromPubkey.equals(userPublicKey) &&
+                            parsedInstruction.lamports === totalSolPayment) {
+                            isValidTransaction = true;
+                            break;
+                        }
+                    } catch (err) {
+                        logger.info(`Failed to decode transfer instruction: ${err}`);
+                    }
+                }
+            }
+
+            if (!isValidTransaction) {
+                return res.status(400).json({ error: 'Invalid transaction: incorrect SOL payment.' });
+            }
+
+            // Verify the transaction is signed by the user's SOL address
+            const transactionSigners = transaction.transaction.signatures;
+
+            const signer = transaction.transaction.message.staticAccountKeys[0].toString();
+
+            if (signer !== solAddress) {
+                return res.status(400).json({ error: 'Transaction not signed by the provided SOL address.' });
+            }
+
+            // Step 4: Store the image data on disk and update the database with the image location
+            const updateQueries = await Promise.all(images.map(async (image: BrickImage) => {
+                const imageName = `${uuidv4()}.png`;
+                const imagePath = `${__dirname}../images/${imageName}`;
+
+                // Save the image to disk
+                const base64Data = image.image.replace(/^data:image\/png;base64,/, "");
+                await fs.writeFile(imagePath, base64Data, 'base64');
+
+                // Update the database with the image location
+                return db.none(
+                    `UPDATE wall_bricks
+                    SET
+                        image_location = $1
+                    WHERE
+                        x = $2
+                        AND y = $3`,
+                    [imagePath, image.x, image.y]
+                );
+            }));
+
+            await Promise.all(updateQueries);
+
+            // Store the transaction signature in the edit_bricks table
+            await db.none(
+                `INSERT INTO edit_bricks (username, transaction_hash) VALUES ($1, $2)`,
+                [solAddress, signature]
+            );
+
+            this.cachedImage = undefined;
+
+            return res.status(200).json({ success: true });
+        } catch (error) {
+            logger.error('Error modifying defined purchased bricks:', error);
+            return res.status(500).json({ error: 'Internal server error.' });
+        }
     }
 
     /* This function will take an array of images, with an x, y, and image key,
      * a sol address, and a signed message "`I am signing this message to confirm that ${publicKey.toString()} can upload images to the million pixel wall`;",
-     * this function will verify the signature, verify the pixels exist in the DB and currently all have no image defined,
-     * verify the address is holding the NFTs associated with these pixels, using the getDigitalStandardItems API,
+     * this function will verify the signature, verify the bricks exist in the DB and currently all have no image defined,
+     * verify the address is holding the NFTs associated with these bricks, using the getDigitalStandardItems API,
      * then store the image data the user uploaded. */
-    public async modifyUndefinedPurchasedPixels(db: DB, req: Request, res: Response) {
+    public async modifyUndefinedPurchasedBricks(db: DB, req: Request, res: Response) {
         const { images, solAddress, signedMessage } = req.body;
 
         try {
@@ -287,7 +528,7 @@ export class Api {
                 return res.status(400).json({ error: 'Invalid signature.' });
             }
 
-            // Step 2: Verify that the pixels exist in the DB and currently have no image defined
+            // Step 2: Verify that the bricks exist in the DB and currently have no image defined
             const conditions = images.map((_: BrickImage, index: number) =>
                 `($${index * 2 + 1}, $${index * 2 + 2})`
             ).join(', ');
@@ -309,15 +550,15 @@ export class Api {
             const bricks = await db.any(query, values);
 
             if (bricks.length !== images.length) {
-                return res.status(400).json({ error: 'One or more pixel squares do not exist.' });
+                return res.status(400).json({ error: 'One or more bricks do not exist.' });
             }
 
             const definedImageBricks = bricks.filter(brick => brick.image_location);
             if (definedImageBricks.length > 0) {
-                return res.status(400).json({ error: 'One or more pixel squares already have an image defined.', definedImageBricks });
+                return res.status(400).json({ error: 'One or more bricks already have an image defined.', definedImageBricks });
             }
 
-            // Step 3: Verify the address is holding the NFTs associated with these pixels
+            // Step 3: Verify the address is holding the NFTs associated with these bricks
             const assetIds = bricks.map(brick => brick.assetId);
             const digitalItems = await this.getDigitalStandardItems(userPublicKey);
             const ownedAssetIds = digitalItems.map(item => item.assetId);
@@ -325,7 +566,7 @@ export class Api {
             const missingAssets = assetIds.filter(assetId => !ownedAssetIds.includes(assetId));
 
             if (missingAssets.length > 0) {
-                return res.status(400).json({ error: 'Address does not hold the required NFTs for these pixels.', missingAssets });
+                return res.status(400).json({ error: 'Address does not hold the required NFTs for these bricks.', missingAssets });
             }
 
             // Step 4: Store the image data on disk and update the database with the image location
@@ -357,12 +598,12 @@ export class Api {
 
             return res.status(200).json({ success: true });
         } catch (error) {
-            logger.error('Error modifying undefined purchased pixels:', error);
+            logger.error('Error modifying undefined purchased bricks:', error);
             return res.status(500).json({ error: 'Internal server error.' });
         }
     }
 
-    public async getUserPixels(db: DB, req: Request, res: Response) {
+    public async getUserBricks(db: DB, req: Request, res: Response) {
         const { solAddress } = req.body;
 
         try {
@@ -389,7 +630,7 @@ export class Api {
                     x,
                     y,
                     assetId AS "assetId",
-                    image_location IS NULL AS "hasImage"
+                    image_location IS NOT NULL AS "hasImage"
                 FROM
                     wall_bricks
                 WHERE
@@ -398,32 +639,31 @@ export class Api {
 
             const userBricks = await db.any(query, [assetIds]);
 
+            // Create a map of digital items keyed by assetId
+            const digitalItemsMap = new Map(digitalItems.map(item => [item.assetId, item]));
+
+            // Merge brick data with corresponding digital item properties
+            const bricksWithDigitalItems = userBricks.map(brick => {
+                const digitalItem = digitalItemsMap.get(brick.assetId);
+
+                return {
+                    ...brick,
+                    ...digitalItem,
+                    name: `${brick.x},${brick.y}`,
+                };
+            });
+
             return res.status(200).json({
                 success: true,
-                bricks: userBricks.map((b) => {
-                    return {
-                        ...b,
-                        name: `${b.x},${b.y}`,
-                    };
-                }),
+                bricks: bricksWithDigitalItems,
             });
         } catch (error) {
-            logger.error('Error fetching user pixels:', error);
+            logger.error('Error fetching user bricks:', error);
             return res.status(500).json({ error: 'Internal server error.' });
         }
     }
 
-    /* This function will take a transaction signature as input,
-     * validate the transaction is on chain, parse it, verify
-     * it is legitimate, mark the pixels as purchased in the DB,
-     * and store any related info in the DB */
-    public async flagPixelsAsPurchased(db: DB, req: Request, res: Response) {
-        return res.status(200).json({
-            success: true,
-        });
-    }
-
-    /* This function will iterate through the saved pixels / blocks,
+    /* This function will iterate through the saved bricks / blocks,
      * add them to the fabric js canvas, render the image to file,
      * maybe cache it in some way to avoid multiple renders, and
      * then return the image to the caller. It will also return info
@@ -437,7 +677,7 @@ export class Api {
                 });
             }
 
-            // Query the database to get all pixels/blocks with their purchase and image info
+            // Query the database to get all bricks/blocks with their purchase and image info
             const query = `
                 SELECT x, y, image_location, purchased
                 FROM wall_bricks
@@ -599,7 +839,7 @@ export class Api {
             });
         });
 
-        this.updatePurchasedPixels();
+        this.updatePurchasedbricks();
     }
 
     /* Handles catching rejected promises and sending them to the error handler */
@@ -734,7 +974,7 @@ export class Api {
         const rpcAsset = await this.connectionWrapper.getAsset(assetId);
 
         if (rpcAsset.ownership.owner !== owner.publicKey.toBase58()) {
-            throw new Error('One or more pixel squares are already purchased. Try refreshing the page, your purchase may have already gone through.');
+            throw new Error('One or more bricks are already purchased. Try refreshing the page, your purchase may have already gone through.');
         }
 
         const leafNonce = rpcAsset.compression.leaf_id;
@@ -770,7 +1010,7 @@ export class Api {
         return transferIx;
     }
 
-    private async getDigitalStandardItems(address: PublicKey): Promise<any[]> {
+    private async getDigitalStandardItems(address: PublicKey): Promise<CompressedNFT[]> {
         let compressedNFTs: any[] = [];
 
         try {
@@ -824,13 +1064,20 @@ export class Api {
         }
     
         return compressedNFTs.map((c) => {
+            const metadata = c.content?.metadata;
+
+            const image = c.content?.files.length
+                ? c.content.files[0].uri
+                : undefined;
+
             return {
                 assetId: c.id,
+                image,
             }
         });
     }
 
-    private async updatePurchasedPixels() {
+    private async updatePurchasedbricks() {
         while (true) {
             try {
                 // Fetch all current assets in the system wallet
@@ -859,7 +1106,7 @@ export class Api {
                     logger.debug("No bricks to update.");
                 }
             } catch (err) {
-                logger.error(`Error updating purchased pixels: ${err}`);
+                logger.error(`Error updating purchased bricks: ${err}`);
             }
 
             // Sleep for 5 minutes
