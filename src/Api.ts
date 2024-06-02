@@ -674,6 +674,8 @@ export class Api {
                 return res.status(200).json({
                     image: this.cachedImage,
                     bricks: this.cachedBricks,
+                    pricePerBrick: PRICE_PER_BRICK,
+                    pricePerBrickEdit: PRICE_PER_BRICK_EDIT,
                 });
             }
 
@@ -736,6 +738,8 @@ export class Api {
             return res.status(200).json({
                 image: this.cachedImage,
                 bricks: this.cachedBricks,
+                pricePerBrick: PRICE_PER_BRICK,
+                pricePerBrickEdit: PRICE_PER_BRICK_EDIT,
             });
         } catch (error) {
             logger.error('Error getting wall info:', error);
