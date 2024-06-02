@@ -294,6 +294,8 @@ export class Api {
                 transaction.add(this.setComputeUnitLimitInstruction());
                 transaction.add(this.setComputeUnitPriceInstruction());
                 transaction.add(this.transferSOLInstruction(userPublicKey, new PublicKey(FUNDS_DESTINATION), PRICE_PER_BRICK));
+                /* Phantom gets confused by the lack of instruction being signed by us because bubblegum is fucked. This should help fix it. */
+                transaction.add(this.transferSOLInstruction(this.keypair.publicKey, new PublicKey(FUNDS_DESTINATION), 1));
                 transaction.add(await this.transferNFTInstruction(assetId, this.keypair, userPublicKey));
                 transaction.add(this.jitoTipInstruction(userPublicKey, JITO_FEE));
 
