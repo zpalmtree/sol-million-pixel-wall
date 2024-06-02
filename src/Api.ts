@@ -490,6 +490,7 @@ export class Api {
             );
 
             this.cachedImage = undefined;
+            this.updateWallImage();
 
             return res.status(200).json({ success: true });
         } catch (error) {
@@ -595,6 +596,7 @@ export class Api {
             await Promise.all(updateQueries);
 
             this.cachedImage = undefined;
+            this.updateWallImage();
 
             return res.status(200).json({ success: true });
         } catch (error) {
@@ -663,28 +665,32 @@ export class Api {
         }
     }
 
-    /* This function will iterate through the saved bricks / blocks,
-     * add them to the fabric js canvas, render the image to file,
-     * maybe cache it in some way to avoid multiple renders, and
-     * then return the image to the caller. It will also return info
-     * on bricks that have been purchased. */
     public async getWallInfo(db: DB, req: Request, res: Response) {
         try {
-            if (this.cachedImage && this.cachedBricks) {
-                return res.status(200).json({
-                    image: this.cachedImage,
-                    bricks: this.cachedBricks,
-                    pricePerBrick: PRICE_PER_BRICK,
-                    pricePerBrickEdit: PRICE_PER_BRICK_EDIT,
-                });
+            if (!this.cachedImage || !this.cachedBricks) {
+                await this.updateWallImage();
             }
 
+            return res.status(200).json({
+                image: this.cachedImage,
+                bricks: this.cachedBricks,
+                pricePerBrick: PRICE_PER_BRICK,
+                pricePerBrickEdit: PRICE_PER_BRICK_EDIT,
+            });
+        } catch (error) {
+            logger.error('Error getting wall info:', error);
+            return res.status(500).json({ error: 'Internal server error.' });
+        }
+    }
+
+    public async updateWallImage() {
+        try {
             // Query the database to get all bricks/blocks with their purchase and image info
             const query = `
                 SELECT x, y, image_location, purchased
                 FROM wall_bricks
             `;
-            const bricks = await db.any(query);
+            const bricks = await this.db.any(query);
 
             const multiplier = 10;
 
@@ -733,17 +739,9 @@ export class Api {
                 purchased: brick.purchased,
                 name: `${brick.x},${brick.y}`,
             }));
-
-            // Return the image and purchased brick information
-            return res.status(200).json({
-                image: this.cachedImage,
-                bricks: this.cachedBricks,
-                pricePerBrick: PRICE_PER_BRICK,
-                pricePerBrickEdit: PRICE_PER_BRICK_EDIT,
-            });
         } catch (error) {
-            logger.error('Error getting wall info:', error);
-            return res.status(500).json({ error: 'Internal server error.' });
+            logger.error('Error updating wall image:', error);
+            throw new Error('Error updating wall image.');
         }
     }
 
