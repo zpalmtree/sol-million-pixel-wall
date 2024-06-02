@@ -13,7 +13,10 @@ export const BRICK_HEIGHT = CANVAS_HEIGHT / BRICKS_PER_COLUMN;
 
 
 export const CORS_WHITELIST: string[] = [
+    'https://build.wallonsolana.com',
+    'http://build.wallonsolana.com',
     'build.wallonsolana.com',
+    'wallonsolana.com',
 ];
 
 export const JITO_FEE = 30_000;
