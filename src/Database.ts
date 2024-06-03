@@ -42,22 +42,24 @@ export async function createTables(db: DB) {
 
 async function loadBricksFromJSON(db: DB) {
     try {
-        const filePath = `${__dirname}../bricks.json`;
+        const filePath = `${__dirname}/../bricks.json`;
         const data = await fs.readFile(filePath, 'utf8');
         const bricksData: Brick[] = JSON.parse(data);
 
-        const result = await db.oneOrNone('SELECT COUNT(*) FROM wall_bricks');
-        const count = Number(result.count);
+        const result = await db.any('SELECT x, y FROM wall_bricks');
+        const existingCoordinates = new Set(result.map((r: any) => `${r.x},${r.y}`));
 
-        if (count === 0) {
-            logger.debug('Loading bricks into the wall_bricks table.');
+        const newBricks = bricksData.filter(brick => brick.assetId && !existingCoordinates.has(`${brick.column},${brick.row}`));
+
+        if (newBricks.length > 0) {
+            logger.debug(`Loading ${newBricks.length} new bricks into the wall_bricks table.`);
 
             const insertQuery = `
                 INSERT INTO wall_bricks (x, y, assetId, purchased, image_location)
                 VALUES ($1, $2, $3, $4, $5)
             `;
 
-            const promises = bricksData.filter((b) => b.assetId).map(brick => {
+            const promises = newBricks.filter((b) => b.assetId).map(brick => {
                 return db.none(
                     insertQuery,
                     [
@@ -72,9 +74,9 @@ async function loadBricksFromJSON(db: DB) {
 
             await Promise.all(promises);
 
-            logger.debug('Bricks loaded into the wall_bricks table.');
+            logger.debug('New bricks loaded into the wall_bricks table.');
         } else {
-            logger.debug('wall_bricks already populated.');
+            logger.debug('No new bricks to load.');
         }
     } catch (error) {
         logger.error('Error loading bricks:', error);
