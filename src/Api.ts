@@ -122,6 +122,8 @@ export class Api {
 
     private cachedBricks: BrickInfo[] | undefined = undefined; 
 
+    private cachedImages: { [key: string]: Image } = {};
+
     constructor(
         private pixelWall: PixelWall,
         private db: DB,
@@ -685,6 +687,15 @@ export class Api {
         }
     }
 
+    private async preloadImage(src: string): Promise<Image> {
+        if (this.cachedImages[src]) {
+            return this.cachedImages[src];
+        }
+        const img = await Image.fromURL(src);
+        this.cachedImages[src] = img;
+        return img;
+    }
+
     public async updateWallImage() {
         try {
             // Query the database to get all bricks/blocks with their purchase and image info
@@ -702,23 +713,34 @@ export class Api {
                 height: CANVAS_HEIGHT * multiplier,
             });
 
+            const defaultImage = await this.preloadImage(`file://${__dirname}../assets/wall.jpg`);
+
             // Add each brick with an image to the canvas
             await Promise.all(bricks.map(async (brick) => {
-                if (brick.image_location) {
-                    const image = await Image.fromURL(`file://${brick.image_location}`);
+                if (brick.purchased) {
+                    let image: Image;
 
-                    /* Downscale */
-                    image.scaleToWidth(BRICK_WIDTH * multiplier);
-                    image.scaleToHeight(BRICK_HEIGHT * multiplier);
+                    if (brick.image_location) {
+                        image = await this.preloadImage(`file://${brick.image_location}`);
+                    } else {
+                        image = defaultImage;
+                    }
 
-                    image.set({
+                    // Clone the image to avoid the canvas ownership issue
+                    const clonedImage = await image.clone();
+
+                    // Upscale
+                    clonedImage.scaleToWidth(BRICK_WIDTH * multiplier);
+                    clonedImage.scaleToHeight(BRICK_HEIGHT * multiplier);
+
+                    clonedImage.set({
                         left: brick.x * BRICK_WIDTH * multiplier,
                         top: brick.y * BRICK_HEIGHT * multiplier,
                         selectable: false,
                         objectCaching: true,
                     });
 
-                    canvas.add(image);
+                    canvas.add(clonedImage);
                 }
             }));
 
@@ -730,7 +752,8 @@ export class Api {
             });
 
             const imageData = dataURL.replace(/^data:image\/png;base64,/, '');
-            const imagePath = `${__dirname}../images/canvas.png`;
+            const imagePath = `${__dirname}/../images/canvas.png`;
+
             await fs.writeFile(imagePath, Buffer.from(imageData, 'base64'));
 
             // Cache the image and bricks info
@@ -742,7 +765,7 @@ export class Api {
                 name: `${brick.x},${brick.y}`,
             }));
         } catch (error) {
-            logger.error('Error updating wall image:', error);
+            console.error('Error updating wall image:', error);
             throw new Error('Error updating wall image.');
         }
     }
