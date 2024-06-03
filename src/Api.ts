@@ -697,6 +697,8 @@ export class Api {
     }
 
     public async updateWallImage() {
+        console.log(`Updating wall image...`);
+
         try {
             // Query the database to get all bricks/blocks with their purchase and image info
             const query = `
@@ -717,6 +719,10 @@ export class Api {
 
             // Add each brick with an image to the canvas
             await Promise.all(bricks.map(async (brick) => {
+                if (!brick.image_location) {
+                    continue;
+                }
+
                 if (brick.purchased) {
                     let image: Image;
 
@@ -768,6 +774,8 @@ export class Api {
             console.error('Error updating wall image:', error);
             throw new Error('Error updating wall image.');
         }
+
+        console.log(`Wall image update complete...`);
     }
 
     public async start() {
