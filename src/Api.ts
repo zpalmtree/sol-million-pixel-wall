@@ -720,7 +720,7 @@ export class Api {
             // Add each brick with an image to the canvas
             await Promise.all(bricks.map(async (brick) => {
                 if (!brick.image_location) {
-                    continue;
+                    return;
                 }
 
                 if (brick.purchased) {
