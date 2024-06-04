@@ -251,21 +251,18 @@ export class Api {
 
             const selectedBricks: Coordinate[] = coordinates;
 
-            // Generate placeholders for each coordinate
             const conditions = selectedBricks.map((_, index) =>
                 `($${index * 2 + 1}, $${index * 2 + 2})`
             ).join(', ');
 
-            // Flatten the coordinates into a single array of values
             const values = selectedBricks.flatMap(coord => [coord.x, coord.y]);
 
-            // Construct the query with the generated placeholders
             const query = `
                 SELECT
                     x,
                     y,
                     assetId AS "assetId",
-                    purchased 
+                    purchased
                 FROM
                     wall_bricks 
                 WHERE
@@ -278,17 +275,9 @@ export class Api {
                 return res.status(400).json({ error: 'One or more bricks do not exist.' });
             }
 
-            const unavailableBricks = bricks.filter(brick => brick.purchased);
-
-            if (unavailableBricks.length > 0) {
-                return res.status(400).json({ error: 'One or more bricks are already purchased.', unavailableBricks });
-            }
-
-            // Create transactions for each coordinate
             const transactions = [];
             const recentBlockhash = (await this.connection.getLatestBlockhash('finalized')).blockhash;
 
-            // Helper function to create a transaction for a brick
             const createTransaction = async (brick: Brick) => {
                 const transaction = new Transaction();
                 const assetId = brick.assetId;
@@ -296,15 +285,24 @@ export class Api {
                 transaction.add(this.setComputeUnitLimitInstruction());
                 transaction.add(this.setComputeUnitPriceInstruction());
                 transaction.add(this.transferSOLInstruction(userPublicKey, new PublicKey(FUNDS_DESTINATION), PRICE_PER_BRICK));
-                /* Phantom gets confused by the lack of instruction being signed by us because bubblegum is fucked. This should help fix it. */
                 transaction.add(this.transferSOLInstruction(this.keypair.publicKey, new PublicKey(FUNDS_DESTINATION), 1));
-                transaction.add(await this.transferNFTInstruction(assetId, this.keypair, userPublicKey));
+
+                const { transferInstruction, owner } = await this.transferNFTInstruction(assetId, this.keypair, userPublicKey);
+                if (!transferInstruction) {
+                    if (owner !== userPublicKey.toBase58()) {
+                        throw new Error('One or more bricks are already purchased by another user.');
+                    }
+
+                    // Skip this transaction as the user already owns the brick
+                    return null;
+                }
+
+                transaction.add(transferInstruction);
                 transaction.add(this.jitoTipInstruction(userPublicKey, JITO_FEE));
 
                 transaction.feePayer = userPublicKey;
                 transaction.recentBlockhash = recentBlockhash;
 
-                // Sign the transaction with our private key
                 transaction.sign(this.keypair);
 
                 const serialized = transaction.serialize({
@@ -315,14 +313,14 @@ export class Api {
                 return serialized.toString('base64');
             };
 
-            // Split bricks into chunks of 100 and process each chunk in parallel
             const chunkSize = 100;
             for (let i = 0; i < bricks.length; i += chunkSize) {
                 const chunk = bricks.slice(i, i + chunkSize);
 
                 try {
                     const chunkTransactions = await Promise.all(chunk.map(createTransaction));
-                    transactions.push(...chunkTransactions);
+                    // Filter out any null transactions (bricks user already owns)
+                    transactions.push(...chunkTransactions.filter(tx => tx !== null));
                 } catch (err: any) {
                     res.status(400).json({
                         error: err.toString(),
@@ -697,7 +695,7 @@ export class Api {
     }
 
     public async updateWallImage() {
-        console.log(`Updating wall image...`);
+        logger.info(`Updating wall image...`);
 
         try {
             // Query the database to get all bricks/blocks with their purchase and image info
@@ -775,7 +773,7 @@ export class Api {
             throw new Error('Error updating wall image.');
         }
 
-        console.log(`Wall image update complete...`);
+        logger.info(`Wall image update complete...`);
     }
 
     public async start() {
@@ -1008,8 +1006,9 @@ export class Api {
 
         const rpcAsset = await this.connectionWrapper.getAsset(assetId);
 
-        if (rpcAsset.ownership.owner !== owner.publicKey.toBase58()) {
-            throw new Error('One or more bricks are already purchased. Try refreshing the page, your purchase may have already gone through.');
+        if (rpcAsset.ownership.owner === newOwner.toBase58()) {
+            // If the new owner already owns the asset, return null to indicate no transfer is needed
+            return { transferInstruction: null, owner: rpcAsset.ownership.owner };
         }
 
         const leafNonce = rpcAsset.compression.leaf_id;
@@ -1018,7 +1017,7 @@ export class Api {
             ? new PublicKey(rpcAsset.ownership.delegate)
             : new PublicKey(rpcAsset.ownership.owner);
 
-        const transferIx = createTransferInstruction(
+        const transferInstruction = createTransferInstruction(
             {
                 treeAuthority,
                 leafOwner: new PublicKey(rpcAsset.ownership.owner),
@@ -1042,7 +1041,7 @@ export class Api {
             },
         );
 
-        return transferIx;
+        return { transferInstruction, owner: rpcAsset.ownership.owner };
     }
 
     private async getDigitalStandardItems(address: PublicKey): Promise<CompressedNFT[]> {
@@ -1072,14 +1071,14 @@ export class Api {
                 });
 
                 if (!response.ok) {
-                    console.log(`Failed to fetch compressed NFTs: ${response.status}`);
+                    logger.error(`Failed to fetch compressed NFTs: ${response.status}`);
                     break;
                 }
 
                 const rawData = await response.json();
 
                 if (rawData.error) {
-                    console.log(`Error fetching compressed NFTs: ${rawData.error.message}`);
+                    logger.error(`Error fetching compressed NFTs: ${rawData.error.message}`);
                     break;
                 }
 
@@ -1095,7 +1094,7 @@ export class Api {
                 page++;
             }
         } catch (err) {
-            console.log(`Error fetching compressed NFTs: ${err}`);
+            logger.error(`Error fetching compressed NFTs: ${err}`);
         }
     
         return compressedNFTs.map((c) => {
