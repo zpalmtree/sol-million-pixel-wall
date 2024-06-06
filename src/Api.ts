@@ -1124,7 +1124,7 @@ export class Api {
                 // Find bricks whose assetIds are not in the currentAssetIdsSet
                 const purchasedBricks = bricks.filter(brick => !currentAssetIdsSet.has(brick.assetid));
 
-                if (purchasedBricks.length > 0) {
+                if (purchasedBricks.length > 0 && currentAssets.length > 0) {
                     // Update the database to mark these bricks as purchased
                     const assetIdsToUpdate = purchasedBricks.map(brick => brick.assetid);
 
