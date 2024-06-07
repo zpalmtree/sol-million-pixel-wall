@@ -829,7 +829,7 @@ export class Api {
         this.httpServer.use(this.asyncWrapper(this.guardMiddleware.bind(this)));
 
         /* Parse bodies as json */
-        this.httpServer.use(express.json({ limit: '50MB' }));
+        this.httpServer.use(express.json({ limit: '100MB' }));
 
         /* Attach handlers */
         for (const handler of this.handlers) {
