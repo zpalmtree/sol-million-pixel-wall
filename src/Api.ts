@@ -288,14 +288,6 @@ export class Api {
                 transaction.add(this.transferSOLInstruction(this.keypair.publicKey, new PublicKey(FUNDS_DESTINATION), 1));
 
                 const { transferInstruction, owner } = await this.transferNFTInstruction(assetId, this.keypair, userPublicKey);
-                if (!transferInstruction) {
-                    if (owner !== userPublicKey.toBase58()) {
-                        throw new Error('One or more bricks are already purchased by another user.');
-                    }
-
-                    // Skip this transaction as the user already owns the brick
-                    return null;
-                }
 
                 transaction.add(transferInstruction);
                 transaction.add(this.jitoTipInstruction(userPublicKey, JITO_FEE));
@@ -1006,11 +998,6 @@ export class Api {
         })).slice(0, sliceIndex);
 
         const rpcAsset = await this.connectionWrapper.getAsset(assetId);
-
-        if (rpcAsset.ownership.owner === newOwner.toBase58()) {
-            // If the new owner already owns the asset, return null to indicate no transfer is needed
-            return { transferInstruction: null, owner: rpcAsset.ownership.owner };
-        }
 
         const leafNonce = rpcAsset.compression.leaf_id;
         const treeAuthority = await getBubblegumAuthorityPDA(merkleTree);
