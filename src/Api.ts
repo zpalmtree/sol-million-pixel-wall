@@ -873,6 +873,7 @@ export class Api {
         });
 
         this.updatePurchasedbricks();
+        this.updateWallImage();
     }
 
     /* Handles catching rejected promises and sending them to the error handler */
