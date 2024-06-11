@@ -511,7 +511,7 @@ export class Api {
             }
 
             // Step 1: Verify the signed message
-            const message = `I am signing this message to confirm that ${userPublicKey.toString()} can upload images to the million pixel wall`;
+            const message = `I am signing this message to confirm that ${userPublicKey.toString()} can upload images to the meme wall`;
 
             const isValidSignature = await verifySignature({
                 address: solAddress,
