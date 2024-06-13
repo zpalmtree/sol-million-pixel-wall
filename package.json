@@ -25,6 +25,7 @@
         "@types/node": "^20.12.7",
         "@types/node-fetch": "^2.6.11",
         "@types/uuid": "^9.0.8",
+        "@types/valid-url": "^1.0.7",
         "axios": "^1.7.2",
         "bs58": "^5.0.0",
         "cors": "^2.8.5",
@@ -37,7 +38,8 @@
         "pg-promise": "^11.6.0",
         "tslog": "^4.4.4",
         "tweetnacl": "^1.0.3",
-        "uuid": "^9.0.1"
+        "uuid": "^9.0.1",
+        "valid-url": "^1.0.9"
     },
     "devDependencies": {
         "@types/jest": "^29.2.5",

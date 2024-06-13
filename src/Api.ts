@@ -29,6 +29,7 @@ import {
     StaticCanvas,
     Image,
 } from 'fabric/node';
+import { isWebUri } from 'valid-url';
 
 import { WrappedConnection } from './WrappedConnection.js';
 import { PixelWall } from './PixelWall.js';
@@ -330,7 +331,7 @@ export class Api {
     }
 
     public async modifyDefinedPurchasedBricks(db: DB, req: Request, res: Response) {
-        const { images, solAddress, signature } = req.body;
+        const { images, solAddress, signature, url } = req.body;
 
         try {
             let userPublicKey: PublicKey;
@@ -339,6 +340,11 @@ export class Api {
                 userPublicKey = new PublicKey(solAddress);
             } catch (e) {
                 return res.status(400).json({ error: 'Invalid SOL address provided.' });
+            }
+
+            // Validate the provided URL if it's given
+            if (url && !isWebUri(url)) {
+                return res.status(400).json({ error: 'Invalid URL provided.' });
             }
 
             // Step 1: Verify that the bricks exist in the DB and currently have an image defined
@@ -463,15 +469,16 @@ export class Api {
                 const base64Data = image.image.replace(/^data:image\/png;base64,/, "");
                 await fs.writeFile(imagePath, base64Data, 'base64');
 
-                // Update the database with the image location
+                // Update the database with the image location and the optional URL if provided
                 return db.none(
                     `UPDATE wall_bricks
                     SET
-                        image_location = $1
+                        image_location = $1,
+                        url = $2
                     WHERE
-                        x = $2
-                        AND y = $3`,
-                    [imagePath, image.x, image.y]
+                        x = $3
+                        AND y = $4`,
+                    [imagePath, url || null, image.x, image.y]
                 );
             }));
 
@@ -499,7 +506,7 @@ export class Api {
      * verify the address is holding the NFTs associated with these bricks, using the getDigitalStandardItems API,
      * then store the image data the user uploaded. */
     public async modifyUndefinedPurchasedBricks(db: DB, req: Request, res: Response) {
-        const { images, solAddress, signedMessage } = req.body;
+        const { images, solAddress, signedMessage, url } = req.body;
 
         try {
             let userPublicKey: PublicKey;
@@ -508,6 +515,11 @@ export class Api {
                 userPublicKey = new PublicKey(solAddress);
             } catch (e) {
                 return res.status(400).json({ error: 'Invalid SOL address provided.' });
+            }
+
+            // Validate the provided URL if it's given
+            if (url && !isWebUri(url)) {
+                return res.status(400).json({ error: 'Invalid URL provided.' });
             }
 
             // Step 1: Verify the signed message
@@ -564,26 +576,26 @@ export class Api {
                 return res.status(400).json({ error: 'Address does not hold the required NFTs for these bricks.', missingAssets });
             }
 
-            // Step 4: Store the image data on disk and update the database with the image location
+            // Step 4: Store the image data on disk and update the database with the image location and optional URL
             const updateQueries = await Promise.all(images.map(async (image: BrickImage) => {
                 const imageName = `${uuidv4()}.png`;
                 const imagePath = `${__dirname}../images/${imageName}`;
 
                 // Save the image to disk
-                // TODO: Validate size?
                 const base64Data = image.image.replace(/^data:image\/png;base64,/, "");
                 await fs.writeFile(imagePath, base64Data, 'base64');
 
-                // Update the database with the image location
+                // Update the database with the image location and the optional URL if provided
                 return db.none(
                     `UPDATE wall_bricks
                     SET
                         image_location = $1,
-                        purchased = TRUE
+                        purchased = TRUE,
+                        url = $2
                     WHERE
-                        x = $2
-                        AND y = $3`,
-                    [ imagePath, image.x, image.y ]
+                        x = $3
+                        AND y = $4`,
+                    [imagePath, url || null, image.x, image.y]
                 );
             }));
 
@@ -626,7 +638,8 @@ export class Api {
                     x,
                     y,
                     assetId AS "assetId",
-                    image_location IS NOT NULL AS "hasImage"
+                    image_location IS NOT NULL AS "hasImage",
+                    url
                 FROM
                     wall_bricks
                 WHERE
@@ -692,9 +705,16 @@ export class Api {
         try {
             // Query the database to get all bricks/blocks with their purchase and image info
             const query = `
-                SELECT x, y, image_location, purchased
-                FROM wall_bricks
+                SELECT
+                    x,
+                    y,
+                    image_location,
+                    purchased,
+                    url
+                FROM
+                    wall_bricks
             `;
+
             const bricks = await this.db.any(query);
 
             const multiplier = 10;
@@ -759,6 +779,7 @@ export class Api {
                 y: brick.y,
                 purchased: brick.purchased,
                 name: `${brick.x},${brick.y}`,
+                url: brick.url,
             }));
         } catch (error) {
             console.error('Error updating wall image:', error);

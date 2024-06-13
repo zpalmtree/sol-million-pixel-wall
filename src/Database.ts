@@ -55,7 +55,7 @@ async function loadBricksFromJSON(db: DB) {
             logger.debug(`Loading ${newBricks.length} new bricks into the wall_bricks table.`);
 
             const insertQuery = `
-                INSERT INTO wall_bricks (x, y, assetId, purchased, image_location)
+                INSERT INTO wall_bricks (x, y, assetId, purchased, image_location, url)
                 VALUES ($1, $2, $3, $4, $5)
             `;
 
@@ -67,7 +67,8 @@ async function loadBricksFromJSON(db: DB) {
                         brick.row,
                         brick.assetId,
                         false,
-                        null
+                        null,
+                        null,
                     ]
                 );
             });
@@ -97,6 +98,8 @@ async function createWallBricksTable(db: DB) {
             purchased BOOLEAN NOT NULL,
 
             image_location VARCHAR(255),
+
+            url VARCHAR(2000),
 
             CONSTRAINT unique_coordinates UNIQUE(x, y)
         )`
