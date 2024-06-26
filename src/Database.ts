@@ -56,7 +56,7 @@ async function loadBricksFromJSON(db: DB) {
 
             const insertQuery = `
                 INSERT INTO wall_bricks (x, y, assetId, purchased, image_location, url)
-                VALUES ($1, $2, $3, $4, $5)
+                VALUES ($1, $2, $3, $4, $5, $6)
             `;
 
             const promises = newBricks.filter((b) => b.assetId).map(brick => {
