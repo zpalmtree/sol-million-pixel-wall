@@ -213,7 +213,7 @@ export class Api {
             transaction.add(this.setComputeUnitLimitInstruction());
             transaction.add(this.setComputeUnitPriceInstruction());
             transaction.add(this.transferSOLInstruction(userPublicKey, new PublicKey(FUNDS_DESTINATION), totalSolPayment));
-            transaction.add(this.jitoTipInstruction(userPublicKey, JITO_FEE));
+            //transaction.add(this.jitoTipInstruction(userPublicKey, JITO_FEE));
 
             transaction.feePayer = userPublicKey;
             transaction.recentBlockhash = recentBlockhash;
@@ -291,7 +291,7 @@ export class Api {
                 const { transferInstruction, owner } = await this.transferNFTInstruction(assetId, this.keypair, userPublicKey);
 
                 transaction.add(transferInstruction);
-                transaction.add(this.jitoTipInstruction(userPublicKey, JITO_FEE));
+                //transaction.add(this.jitoTipInstruction(userPublicKey, JITO_FEE));
 
                 transaction.feePayer = userPublicKey;
                 transaction.recentBlockhash = recentBlockhash;
