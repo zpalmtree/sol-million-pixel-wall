@@ -1172,45 +1172,41 @@ export class Api {
                 // Fetch all bricks from the database
                 const bricks = await this.db.any(`SELECT * FROM wall_bricks`);
 
+                const bricksToMarkPurchased = [];
+                const bricksToMarkUnpurchased = [];
+
                 for (const brick of bricks) {
-                    try {
-                        const assetInfo = await this.getAssetInfo(brick.assetid);
-                        const isOwnedBySystem = assetInfo.owner === this.keypair.publicKey.toString();
+                    const isOwnedBySystem = currentAssetIdsSet.has(brick.assetid);
 
-                        if (isOwnedBySystem && brick.purchased) {
-                            // Mark as not purchased if we own it but it was flagged as purchased
-                            await this.db.none(
-                                `UPDATE wall_bricks SET purchased = FALSE WHERE assetid = $1`,
-                                [brick.assetid]
-                            );
-
-                            logger.info(`Corrected: Marked brick ${brick.assetid} as not purchased.`);
-
-                            this.cachedBricks = undefined;
-                        } else if (!isOwnedBySystem && !brick.purchased) {
-
-                            // Mark as purchased if we don't own it and it wasn't flagged as purchased
-                            await this.db.none(
-                                `UPDATE wall_bricks SET purchased = TRUE WHERE assetid = $1`,
-                                [brick.assetid]
-                            );
-
-                            logger.info(`Updated: Marked brick ${brick.assetid} as purchased.`);
-
-                            this.cachedBricks = undefined;
-                        }
-                    } catch (err) {
-                        logger.error(`Error processing brick ${brick.assetid}: ${err}`);
-                        // Skip this brick and continue with the next one
-                        continue;
+                    if (isOwnedBySystem && brick.purchased) {
+                        bricksToMarkUnpurchased.push(brick.assetid);
+                    } else if (!isOwnedBySystem && !brick.purchased) {
+                        bricksToMarkPurchased.push(brick.assetid);
                     }
+                }
+
+                if (bricksToMarkUnpurchased.length > 0) {
+                    await this.db.none(
+                        `UPDATE wall_bricks SET purchased = FALSE WHERE assetid IN ($1:csv)`,
+                        [bricksToMarkUnpurchased]
+                    );
+                    logger.info(`Corrected: Marked ${bricksToMarkUnpurchased.length} bricks as not purchased.`);
+                    this.cachedBricks = undefined;
+                }
+
+                if (bricksToMarkPurchased.length > 0) {
+                    await this.db.none(
+                        `UPDATE wall_bricks SET purchased = TRUE WHERE assetid IN ($1:csv)`,
+                        [bricksToMarkPurchased]
+                    );
+                    logger.info(`Updated: Marked ${bricksToMarkPurchased.length} bricks as purchased.`);
+                    this.cachedBricks = undefined;
                 }
 
                 logger.info(`Completed update cycle for purchased bricks.`);
             } catch (err) {
-                logger.error(`Error updating purchased bricks: ${err}`);
+                logger.error(`Error in updatePurchasedBricks cycle: ${err}`);
             }
-
             // Sleep for 5 minutes
             await sleep(5 * 60 * 1000);
         }
