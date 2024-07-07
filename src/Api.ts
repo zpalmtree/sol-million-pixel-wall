@@ -885,7 +885,7 @@ export class Api {
             });
         });
 
-        this.updatePurchasedbricks();
+        this.updatePurchasedBricks();
         this.updateWallImage();
     }
 
@@ -1053,6 +1053,48 @@ export class Api {
         return { transferInstruction, owner: rpcAsset.ownership.owner };
     }
 
+    private async getAssetInfo(assetId: string): Promise<{ owner: string }> {
+        try {
+            const response = await fetch(process.env.RPC_ADDRESS!, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    jsonrpc: '2.0',
+                    id: '1',
+                    method: 'getAsset',
+                    params: {
+                        id: assetId,
+                    },
+                }),
+            });
+
+            if (!response.ok) {
+                logger.error(`Failed to fetch asset info: ${response.status}`);
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+
+            const rawData = await response.json();
+            if (rawData.error) {
+                logger.error(`Error fetching asset info: ${rawData.error.message}`);
+                throw new Error(rawData.error.message);
+            }
+
+            const assetInfo = rawData.result;
+            if (!assetInfo) {
+                throw new Error(`No asset info found for asset ID: ${assetId}`);
+            }
+
+            return {
+                owner: assetInfo.ownership.owner,
+            };
+        } catch (err) {
+            logger.error(`Error fetching asset info for ${assetId}: ${err}`);
+            throw err;
+        }
+    }
+
     private async getDigitalStandardItems(address: PublicKey): Promise<CompressedNFT[]> {
         let compressedNFTs: any[] = [];
 
@@ -1120,34 +1162,51 @@ export class Api {
         });
     }
 
-    private async updatePurchasedbricks() {
+    private async updatePurchasedBricks() {
         while (true) {
             try {
                 // Fetch all current assets in the system wallet
                 const currentAssets = await this.getDigitalStandardItems(this.keypair.publicKey);
                 const currentAssetIdsSet = new Set(currentAssets.map(asset => asset.assetId));
 
-                // Fetch all bricks from the database that are not marked as purchased
-                const bricks = await this.db.any(`SELECT * FROM wall_bricks WHERE purchased = FALSE`);
+                // Fetch all bricks from the database
+                const bricks = await this.db.any(`SELECT * FROM wall_bricks`);
 
-                // Find bricks whose assetIds are not in the currentAssetIdsSet
-                const purchasedBricks = bricks.filter(brick => !currentAssetIdsSet.has(brick.assetid));
+                for (const brick of bricks) {
+                    try {
+                        const assetInfo = await this.getAssetInfo(brick.assetid);
+                        const isOwnedBySystem = assetInfo.owner === this.keypair.publicKey.toString();
 
-                if (purchasedBricks.length > 0 && currentAssets.length > 0) {
-                    // Update the database to mark these bricks as purchased
-                    const assetIdsToUpdate = purchasedBricks.map(brick => brick.assetid);
+                        if (isOwnedBySystem && brick.purchased) {
+                            // Mark as not purchased if we own it but it was flagged as purchased
+                            await this.db.none(
+                                `UPDATE wall_bricks SET purchased = FALSE WHERE assetid = $1`,
+                                [brick.assetid]
+                            );
 
-                    await this.db.none(
-                        `UPDATE wall_bricks SET purchased = TRUE WHERE assetid IN ($1:csv)`,
-                        [assetIdsToUpdate]
-                    );
+                            logger.info(`Corrected: Marked brick ${brick.assetid} as not purchased.`);
 
-                    this.cachedBricks = undefined;
+                            this.cachedBricks = undefined;
+                        } else if (!isOwnedBySystem && !brick.purchased) {
 
-                    logger.info(`Updated ${assetIdsToUpdate.length} bricks as purchased.`);
-                } else {
-                    logger.debug("No bricks to update.");
+                            // Mark as purchased if we don't own it and it wasn't flagged as purchased
+                            await this.db.none(
+                                `UPDATE wall_bricks SET purchased = TRUE WHERE assetid = $1`,
+                                [brick.assetid]
+                            );
+
+                            logger.info(`Updated: Marked brick ${brick.assetid} as purchased.`);
+
+                            this.cachedBricks = undefined;
+                        }
+                    } catch (err) {
+                        logger.error(`Error processing brick ${brick.assetid}: ${err}`);
+                        // Skip this brick and continue with the next one
+                        continue;
+                    }
                 }
+
+                logger.info(`Completed update cycle for purchased bricks.`);
             } catch (err) {
                 logger.error(`Error updating purchased bricks: ${err}`);
             }
