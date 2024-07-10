@@ -20,7 +20,8 @@ export const CORS_WHITELIST: string[] = [
 
 export const JITO_FEE = 30_000;
 
-export const PRICE_PER_BRICK = 0.25 * LAMPORTS_PER_SOL;
+//export const PRICE_PER_BRICK = 0.25 * LAMPORTS_PER_SOL;
+export const PRICE_PER_BRICK = 0.0000001 * LAMPORTS_PER_SOL;
 export const PRICE_PER_BRICK_EDIT = 0.0069 * LAMPORTS_PER_SOL;
 
 export const FUNDS_DESTINATION = '9hLBcTppq5DUziXTnuUtorbzKSDzM8cFz3FSvUgD8Nsf';
