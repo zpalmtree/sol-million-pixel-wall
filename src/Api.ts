@@ -500,13 +500,35 @@ export class Api {
         }
     }
 
+    private async verifyTransaction(publicKey: string, serializedTransaction: Buffer): Promise<boolean> {
+        try {
+            const transaction = Transaction.from(serializedTransaction);
+
+            // Check if the transaction is signed by the expected public key
+            if (!transaction.verifySignatures()) {
+                return false;
+            }
+
+            const signer = transaction.signatures[0].publicKey.toString();
+
+            if (signer !== publicKey) {
+                return false;
+            }
+
+            return true;
+        } catch (error) {
+            console.error('Error verifying transaction:', error);
+            return false;
+        }
+    }
+
     /* This function will take an array of images, with an x, y, and image key,
      * a sol address, and a signed message "`I am signing this message to confirm that ${publicKey.toString()} can upload images to the million pixel wall`;",
      * this function will verify the signature, verify the bricks exist in the DB and currently all have no image defined,
      * verify the address is holding the NFTs associated with these bricks, using the getDigitalStandardItems API,
      * then store the image data the user uploaded. */
     public async modifyUndefinedPurchasedBricks(db: DB, req: Request, res: Response) {
-        const { images, solAddress, signedMessage, url } = req.body;
+        const { images, solAddress, signedMessage, url, serializedTransaction } = req.body;
 
         try {
             let userPublicKey: PublicKey;
@@ -517,22 +539,34 @@ export class Api {
                 return res.status(400).json({ error: 'Invalid SOL address provided.' });
             }
 
+            if (!signedMessage && !serializedTransaction) {
+                return res.status(400).json({ error: 'Neither signedMesage nor serializedTransaction were provided.' });
+            }
+
             // Validate the provided URL if it's given
             if (url && !isWebUri(url)) {
                 return res.status(400).json({ error: 'Invalid URL provided.' });
             }
 
-            // Step 1: Verify the signed message
-            const message = `I am signing this message to confirm that ${userPublicKey.toString()} can upload images to the meme wall`;
+            if (signedMessage) {
+                // Step 1: Verify the signed message
+                const message = `I am signing this message to confirm that ${userPublicKey.toString()} can upload images to the meme wall`;
 
-            const isValidSignature = await verifySignature({
-                address: solAddress,
-                toSign: new TextEncoder().encode(message),
-                signature: signedMessage,
-            });
+                const isValidSignature = await verifySignature({
+                    address: solAddress,
+                    toSign: new TextEncoder().encode(message),
+                    signature: signedMessage,
+                });
 
-            if (!isValidSignature) {
-                return res.status(400).json({ error: 'Invalid signature.' });
+                if (!isValidSignature) {
+                    return res.status(400).json({ error: 'Invalid signature.' });
+                }
+            } else {
+                const isValidSignature = await this.verifyTransaction(solAddress, Buffer.from(serializedTransaction, 'base64'));
+
+                if (!isValidSignature) {
+                    return res.status(400).json({ error: 'Invalid signature.' });
+                }
             }
 
             // Step 2: Verify that the bricks exist in the DB and currently have no image defined
